@@ -158,7 +158,8 @@ class CaptionProcessor:
         return dict(
             #messages=chat_messages, # not needed, since we apply_chat_template=False in the processor config
             prompt=prompt,
-            multi_modal_data= {"image": images},
+            #multi_modal_data= {"image": images},
+            images=images,
             sampling_params=dict(
                 temperature=self.config.temperature,
                 max_tokens=self.config.max_tokens,
@@ -264,6 +265,7 @@ class ImageCaptioningPipeline:
             accelerator_type=self.config.accelerator_type,
             concurrency=self.config.num_inference_engines,
             apply_chat_template=False, # Already applied in preprocessing step
+            tokenize=False, # Already tokenized in preprocessing step
             has_image=False, # Already handled in preprocessing step
         )
 
