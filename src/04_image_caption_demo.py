@@ -159,7 +159,7 @@ class CaptionProcessor:
             #messages=chat_messages, # not needed, since we apply_chat_template=False in the processor config
             prompt=prompt,
             #multi_modal_data= {"image": images},
-            images=images,
+            image=images,
             sampling_params=dict(
                 temperature=self.config.temperature,
                 max_tokens=self.config.max_tokens,
