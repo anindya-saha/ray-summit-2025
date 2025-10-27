@@ -3,8 +3,9 @@ Image Captioning Demo using Ray Data, Ray Data LLM, and vLLM.
 
 - Load dataset
 - Dataset repartitioning
-- Preprocess dataset in parallel
-- Postprocess dataset in parallel
+- Scale out Preprocess dataset using Qwen 2.5 VL processor
+- Initialize the processor in the constructor.
+- Scale out Postprocess dataset
 
 GPU-accelerated inference:
 - Create LLM processor pipeline
@@ -21,12 +22,15 @@ import logging
 from typing import Any
 from pathlib import Path
 from io import BytesIO
-import datasets
-import ray
+
 from PIL import Image
-from ray.data.llm import build_llm_processor, vLLMEngineProcessorConfig
 
 from dataclasses import dataclass, field
+
+import datasets
+
+import ray
+from ray.data.llm import build_llm_processor, vLLMEngineProcessorConfig
 
 from transformers import Qwen2_5_VLProcessor
 from qwen_vl_utils import process_vision_info
@@ -50,9 +54,9 @@ class JobConfig:
     dataset_split: str = "train[:10000]"
 
     # Processing configuration
-    num_partitions: int = 96
-    preprocessing_concurrency: int = 16
-    preprocessing_num_cpus: int = 2
+    num_partitions: int = 32
+    preprocessing_concurrency: int = 8
+    preprocessing_num_cpus: int = 4
     postprocessing_concurrency: int = 8
     postprocessing_num_cpus: int = 4
 
@@ -63,9 +67,9 @@ class JobConfig:
     min_pixels: int = 256 * 28 * 28
 
     # Inference configuration
-    batch_size: int = 4
-    num_inference_engines: int = 2
-    tensor_parallel_size: int = 1
+    batch_size: int = 4             # Number of samples processed per batch (reduce if GPU memory is limited)
+    num_inference_engines: int = 2  # Number of llm engines to run in parallel
+    tensor_parallel_size: int = 1   # Number of GPUs per llm engine
     accelerator_type: str = "A10G"
 
     # Generation parameters
@@ -87,12 +91,11 @@ class JobConfig:
         return self.output_dir / self.output_filename
 
 
-
 class CaptionProcessor:
-    """Caption processor for image captioning pipeline."""
+    """Image caption processor for image captioning pipeline."""
 
     def __init__(self, config: JobConfig):
-        """Initialize the processor with configuration."""
+        """Initialize the Qwen2.5 VL processor with configuration."""
         self.config = config
 
         # Load processor from pretrained model
@@ -101,26 +104,41 @@ class CaptionProcessor:
             trust_remote_code=True,
             # min_pixels=self.config.min_pixels,
             # max_pixels=self.config.max_pixels,
-            # use_auth_token=os.environ["HF_TOKEN"],
-            # cache_dir=os.environ["HF_HOME"],
         )
         self.logger = logging.getLogger(self.__class__.__name__)
 
     def __call__(self, row: dict[str, Any]) -> dict[str, Any]:
         """
-        Prepare image and prompt for captioning.
+        Prepare image and prompt for image captioning.
 
         Args:
             row: Input row containing image data
                 Example structure:
                 {
-                    "label": str,
-                    "path": str,
+                    "image": {
+                        "bytes": bytes,
+                        "path": str,
+                    },
+                    "label": int,
                 }
 
         Returns:
             Preprocessed row with messages and preserved image data
         """
+        # Handle different image schemas (cached vs HuggingFace)
+        if isinstance(row["image"], dict):
+            # HuggingFace format with bytes
+            pil_image = Image.open(BytesIO(row["image"]["bytes"]))
+            image_path = row["image"].get("path", "unknown")
+            image_bytes = row["image"]["bytes"]
+        else:
+            # Direct PIL Image from cached dataset
+            pil_image = row["image"]
+            image_path = "unknown"
+            # Convert PIL to bytes for preservation
+            buffer = BytesIO()
+            pil_image.save(buffer, format="PNG")
+            image_bytes = buffer.getvalue()
         chat_messages = [
             {
                 "role": "system",
@@ -138,7 +156,7 @@ class CaptionProcessor:
                     },
                     {
                         "type": "image",
-                        "image": Image.open(BytesIO(row["image"]["bytes"])),
+                        "image": pil_image,
                     },
                 ],
             },
@@ -149,28 +167,28 @@ class CaptionProcessor:
             chat_messages, tokenize=False, add_generation_prompt=True
         )
 
-        images, videos = process_vision_info(chat_messages)
+        image_inputs, video_inputs = process_vision_info(chat_messages)
 
-        print(f"Images: {images}")
-        print(f"Videos: {videos}")
-        print(f"Prompt: {prompt}")
-        
+        # print(f"Images: {image_inputs}")
+        # print(f"Videos: {video_inputs}")
+        # print(f"Prompt: {prompt}")
+
         return dict(
-            #messages=chat_messages, # not needed, since we apply_chat_template=False in the processor config
+            # messages=chat_messages, # not needed, since we apply_chat_template=False in the processor config
             prompt=prompt,
-            #multi_modal_data= {"image": images},
-            image=images,
+            # multi_modal_data= {"image": images},  # not needed, as # vllm_engine_stage.py:345 will take care of it
+            image=image_inputs,  # ray data system internally renames it to `images` in the request object, then re-wraps it back as `{"image": ...}` for vLLM.
             sampling_params=dict(
                 temperature=self.config.temperature,
                 max_tokens=self.config.max_tokens,
-                #detokenize=False,
+                # detokenize=True, # We should still detokenize the output. Its True by default.
             ),
-            image_bytes=row["image"]["bytes"],
-            image_path=row["image"]["path"],
+            image_bytes=image_bytes,
+            image_path=image_path,
         )
 
 
-class ImageCaptioningPipeline:
+class ImageCaptionPipelineV4:
     """Production-ready image captioning pipeline using Ray Data and vLLM."""
 
     def __init__(self, config: JobConfig):
@@ -242,35 +260,35 @@ class ImageCaptioningPipeline:
                 "tensor_parallel_size": self.config.tensor_parallel_size,
                 "max_model_len": self.config.max_model_len,
                 "enable_chunked_prefill": True,
-                "limit_mm_per_prompt": {"image": 1, "video": 0},
+                "enable_prefix_caching": True,
+                "limit_mm_per_prompt": {"image": 1},
                 "mm_processor_kwargs": {
                     "max_pixels": self.config.max_pixels,
                     "min_pixels": self.config.min_pixels,
                 },
                 "trust_remote_code": True,
-                "gpu_memory_utilization": 0.8,
+                "gpu_memory_utilization": 0.9,
+                # "disable_log_stats": False, # Critical: enable vLLM's internal logging. False by default.
                 "distributed_executor_backend": "ray",
             },
             runtime_env={
                 "env_vars": {
                     "HF_TOKEN": os.environ["HF_TOKEN"],
                     "HF_HOME": os.environ["HF_HOME"],
-                    "RAY_USAGE_STATS_ENABLED": "0",
-                    # "RAY_DEBUG": "1",
-                    # "RAY_DEBUG_POST_MORTEM": "1",
                     "VLLM_USE_V1": "1",
+                    "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
                 },
             },
             batch_size=self.config.batch_size,
             accelerator_type=self.config.accelerator_type,
             concurrency=self.config.num_inference_engines,
-            apply_chat_template=False, # Already applied in preprocessing step
-            tokenize=False, # Already tokenized in preprocessing step
-            has_image=False, # Already handled in preprocessing step
+            apply_chat_template=False,  # Already applied in preprocessing step
+            tokenize=False,  # Already tokenized in preprocessing step
+            has_image=False,  # Already handled in preprocessing step
         )
 
         return build_llm_processor(
-            processor_config,  # type: ignore[arg-type]
+            processor_config,
             preprocess=None,
             postprocess=None,
         )
@@ -293,26 +311,25 @@ class ImageCaptioningPipeline:
         # Initialize Ray
         self.logger.info("Initializing Ray...")
         ray.init(
+            _metrics_export_port=8080,
             runtime_env={
                 "env_vars": {
                     "HF_TOKEN": os.environ["HF_TOKEN"],
                     "HF_HOME": os.environ["HF_HOME"],
-                    "RAY_USAGE_STATS_ENABLED": "0",
-                    # "RAY_DEBUG": "1",
-                    # "RAY_DEBUG_POST_MORTEM": "1",
+                    "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
                 }
             }
         )
 
         try:
             # Step 1: Load dataset
-            dataset = self.load_dataset()
+            ray_dataset = self.load_dataset()
 
             # Step 2: Repartition dataset
-            dataset = self.partition_dataset(dataset)
+            partitioned_dataset = self.partition_dataset(ray_dataset)
 
             # Step 3: Preprocess dataset
-            preprocessed = self.preprocess_dataset(dataset)
+            preprocessed_dataset = self.preprocess_dataset(partitioned_dataset)
 
             # Step 4: Create LLM processor
             llm_processor = self.create_llm_processor()
@@ -320,23 +337,23 @@ class ImageCaptioningPipeline:
             # Step 5: Run inference
             self.logger.info("Starting inference...")
             inference_start = time.time()
-            captioned = llm_processor(preprocessed)
+            captioned_dataset = llm_processor(preprocessed_dataset)
             inference_time = time.time() - inference_start
 
             # Step 6: Postprocess
-            postprocessed = self.postprocess_dataset(captioned)
+            postprocessed_dataset = self.postprocess_dataset(captioned_dataset)
 
             # Step 7: Save results
             self.logger.info(f"Saving results to: {self.config.output_path}")
 
-            postprocessed.write_parquet(str(self.config.output_path))
+            postprocessed_dataset.write_parquet(str(self.config.output_path))
 
             # Step 8: Print samples
             print("\n" + "=" * 70)
             print("SAMPLE CAPTIONS")
             print("=" * 70)
 
-            for i, sample in enumerate(postprocessed.take(3)):
+            for i, sample in enumerate(postprocessed_dataset.take(3)):
                 print(f"\nSample {i+1}:")
                 print(f"  Image Path: {sample["image"]["path"]}")
                 print(f"  Caption: {sample["caption"]}")
@@ -344,7 +361,7 @@ class ImageCaptioningPipeline:
 
             # Step 9: Calculate metrics
             total_time = time.time() - start_time
-            total_samples = dataset.count()
+            total_samples = postprocessed_dataset.count()
 
             self.logger.info("Pipeline completed successfully!")
 
@@ -370,14 +387,15 @@ def main():
     """Main entry point."""
     # Create configuration
     config = JobConfig(
-        dataset_split="train[:100]",  # Small sample for demo
-        num_partitions=32,  # Adjust based on your resources
-        num_inference_engines=2,  # Number of GPUs
-        batch_size=4,
+        dataset_split="train[:10000]",      # Small sample for demo
+        num_partitions=64,                  # Adjust based on your resources
+        num_inference_engines=2,            # Number of llm engines to run in parallel
+        batch_size=8,
     )
 
+
     # Create and run pipeline
-    pipeline = ImageCaptioningPipeline(config)
+    pipeline = ImageCaptionPipelineV4(config)
     results = pipeline.run()
 
     # Print results

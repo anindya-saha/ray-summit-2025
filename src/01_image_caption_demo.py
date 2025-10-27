@@ -12,19 +12,22 @@ GPU-accelerated inference:
 
 from __future__ import annotations
 
-# import asyncio
-import gc
-import logging
 import os
+import gc
 import time
-from dataclasses import dataclass, field
-from io import BytesIO
-from pathlib import Path
+import logging
+
 from typing import Any
+from pathlib import Path
+from io import BytesIO
+
+from PIL import Image
+
+from dataclasses import dataclass, field
 
 import datasets
+
 import ray
-from PIL import Image
 from ray.data.llm import build_llm_processor, vLLMEngineProcessorConfig
 
 
@@ -46,15 +49,15 @@ class JobConfig:
     dataset_split: str = "train[:10000]"
 
     # Model configuration
-    model_name: str = "Qwen/Qwen2-VL-2B-Instruct"
+    model_name: str = "Qwen/Qwen2.5-VL-3B-Instruct"
     max_model_len: int = 4096
     max_pixels: int = 1280 * 28 * 28
     min_pixels: int = 256 * 28 * 28
 
     # Inference configuration
-    batch_size: int = 4
-    num_inference_engines: int = 2
-    tensor_parallel_size: int = 1
+    batch_size: int = 4             # Number of samples processed per batch (reduce if GPU memory is limited)
+    num_inference_engines: int = 2  # Number of llm engines to run in parallel
+    tensor_parallel_size: int = 1   # Number of GPUs per llm engine
     accelerator_type: str = "A10G"
 
     # Generation parameters
@@ -76,7 +79,7 @@ class JobConfig:
         return self.output_dir / self.output_filename
 
 
-class ImageCaptioningPipeline:
+class ImageCaptionPipelineV1:
     """Production-ready image captioning pipeline using Ray Data and vLLM."""
 
     def __init__(self, config: JobConfig):
@@ -86,7 +89,7 @@ class ImageCaptioningPipeline:
 
     def caption_preprocess(self, row: dict[str, Any]) -> dict[str, Any]:
         """
-        Prepare image and prompt for captioning.
+        Prepare image and prompt for image captioning
 
         Args:
             row: Input row containing image data
@@ -102,6 +105,20 @@ class ImageCaptioningPipeline:
         Returns:
             Preprocessed row with messages and preserved image data
         """
+        # Handle different image schemas (cached vs HuggingFace)
+        if isinstance(row["image"], dict):
+            # HuggingFace format with bytes
+            pil_image = Image.open(BytesIO(row["image"]["bytes"]))
+            image_path = row["image"].get("path", "unknown")
+            image_bytes = row["image"]["bytes"]
+        else:
+            # Direct PIL Image from cached dataset
+            pil_image = row["image"]
+            image_path = "unknown"
+            # Convert PIL to bytes for preservation
+            buffer = BytesIO()
+            pil_image.save(buffer, format="PNG")
+            image_bytes = buffer.getvalue()
 
         return {
             "messages": [
@@ -121,7 +138,7 @@ class ImageCaptioningPipeline:
                         },
                         {
                             "type": "image",
-                            "image": Image.open(BytesIO(row["image"]["bytes"])),
+                            "image": pil_image,
                         },
                     ],
                 },
@@ -132,8 +149,8 @@ class ImageCaptioningPipeline:
                 "detokenize": True,
             },
             # Preserve data for postprocessing
-            "image_bytes": row["image"]["bytes"],
-            "image_path": row["image"]["path"],
+            "image_bytes": image_bytes,
+            "image_path": image_path,
         }
 
     def caption_postprocess(self, row: dict[str, Any]) -> dict[str, Any]:
@@ -184,6 +201,9 @@ class ImageCaptioningPipeline:
                     "max_pixels": self.config.max_pixels,
                     "min_pixels": self.config.min_pixels,
                 },
+                "trust_remote_code": True,
+                "gpu_memory_utilization": 0.9,
+                # "disable_log_stats": False, # Critical: enable vLLM's internal logging. False by default.
                 "distributed_executor_backend": "ray",
             },
             runtime_env={
@@ -191,7 +211,6 @@ class ImageCaptioningPipeline:
                     "HF_TOKEN": os.environ["HF_TOKEN"],
                     "HF_HOME": os.environ["HF_HOME"],
                     "VLLM_USE_V1": "1",
-                    "RAY_DEDUP_LOGS": "0",  # Ray deduplicates logs by default. Set to 0 to disable log deduplication
                     "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
                 },
             },
@@ -202,7 +221,7 @@ class ImageCaptioningPipeline:
         )
 
         return build_llm_processor(
-            processor_config,  # type: ignore[arg-type]
+            processor_config,
             preprocess=self.caption_preprocess,
             postprocess=self.caption_postprocess,
         )
@@ -214,14 +233,14 @@ class ImageCaptioningPipeline:
         # Initialize Ray
         self.logger.info("Initializing Ray...")
         ray.init(
+            _metrics_export_port=8080,
             runtime_env={
                 "env_vars": {
                     "HF_TOKEN": os.environ["HF_TOKEN"],
                     "HF_HOME": os.environ["HF_HOME"],
-                    "RAY_DEDUP_LOGS": "0",  # Ray deduplicates logs by default. Set to 0 to disable log deduplication
                     "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
                 }
-            }
+            },
         )
 
         try:
@@ -281,13 +300,12 @@ def main():
     """Main entry point."""
     # Create configuration
     config = JobConfig(
-        dataset_split="train[:1000]",  # Small sample for demo
-        num_inference_engines=2,  # Number of llm engines to run in parallel
-        tensor_parallel_size=1,  # Number of GPUs per llm engine
+        dataset_split="train[:10000]",      # Small sample for demo
+        num_inference_engines=2,            # Number of llm engines to run in parallel
     )
 
     # Create and run pipeline
-    pipeline = ImageCaptioningPipeline(config)
+    pipeline = ImageCaptionPipelineV1(config)
     results = pipeline.run()
 
     # Print results
