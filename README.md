@@ -1,7 +1,6 @@
 # Ray Summit 2025
 
-For Developer Guide; Ref:[Developer.md](Developer.md).  
-For SumitPresentation notes; Ref:[Presentation.md](Presentation.md).
+Developer Guide [developer_guide.md](developer_guide.md).
 
 ---
 **Abstract**  
