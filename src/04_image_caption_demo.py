@@ -267,9 +267,9 @@ class ImageCaptionPipelineV4:
                     "min_pixels": self.config.min_pixels,
                 },
                 "trust_remote_code": True,
-                "gpu_memory_utilization": 0.9,
-                # "disable_log_stats": False, # Critical: enable vLLM's internal logging. False by default.
-                "distributed_executor_backend": "ray",
+                "gpu_memory_utilization": 0.85,
+                #"disable_log_stats": False, # Critical: enable vLLM's internal logging. False by default.
+                #"distributed_executor_backend": "ray",
             },
             runtime_env={
                 "env_vars": {
@@ -321,6 +321,9 @@ class ImageCaptionPipelineV4:
             }
         )
 
+        # ctx = ray.data.DataContext.get_current()
+        # ctx.log_internal_stack_trace_to_stdout = True
+
         try:
             # Step 1: Load dataset
             ray_dataset = self.load_dataset()
@@ -342,6 +345,9 @@ class ImageCaptionPipelineV4:
 
             # Step 6: Postprocess
             postprocessed_dataset = self.postprocess_dataset(captioned_dataset)
+
+            # added this to ensure the dataset is materialized before saving
+            #postprocessed_dataset = postprocessed_dataset.materialize()
 
             # Step 7: Save results
             self.logger.info(f"Saving results to: {self.config.output_path}")
@@ -388,9 +394,8 @@ def main():
     # Create configuration
     config = JobConfig(
         dataset_split="train[:10000]",      # Small sample for demo
-        num_partitions=64,                  # Adjust based on your resources
-        num_inference_engines=2,            # Number of llm engines to run in parallel
-        batch_size=8,
+        num_inference_engines=4,            # Number of llm engines to run in parallel
+        batch_size=16,
     )
 
 

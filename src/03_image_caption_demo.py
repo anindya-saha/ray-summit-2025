@@ -255,9 +255,9 @@ class ImageCaptionPipelineV3:
                     "min_pixels": self.config.min_pixels,
                 },
                 "trust_remote_code": True,
-                "gpu_memory_utilization": 0.9,
+                "gpu_memory_utilization": 0.85,
                 # "disable_log_stats": False, # Critical: enable vLLM's internal logging. False by default.
-                "distributed_executor_backend": "ray",
+                #"distributed_executor_backend": "ray",
             },
             runtime_env={
                 "env_vars": {
@@ -376,7 +376,6 @@ def main():
     # Create configuration
     config = JobConfig(
         dataset_split="train[:10000]",      # Small sample for demo
-        num_partitions=64,                  # Adjust based on your resources
         num_inference_engines=2,            # Number of llm engines to run in parallel
         batch_size=8,
     )

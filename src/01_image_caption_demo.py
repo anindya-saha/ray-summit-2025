@@ -196,15 +196,17 @@ class ImageCaptionPipelineV1:
                 "tensor_parallel_size": self.config.tensor_parallel_size,
                 "max_model_len": self.config.max_model_len,
                 "enable_chunked_prefill": True,
+                "enable_prefix_caching": True,
                 "limit_mm_per_prompt": {"image": 1},
+                "max_num_seqs": 64,
                 "mm_processor_kwargs": {
                     "max_pixels": self.config.max_pixels,
                     "min_pixels": self.config.min_pixels,
                 },
                 "trust_remote_code": True,
-                "gpu_memory_utilization": 0.9,
-                # "disable_log_stats": False, # Critical: enable vLLM's internal logging. False by default.
-                "distributed_executor_backend": "ray",
+                "gpu_memory_utilization": 0.8,
+                #"disable_log_stats": False, # Critical: enable vLLM's internal logging. False by default.
+                #"distributed_executor_backend": "ray",
             },
             runtime_env={
                 "env_vars": {
@@ -274,7 +276,7 @@ class ImageCaptionPipelineV1:
 
             # Step 9: Calculate metrics
             total_time = time.time() - start_time
-            total_samples = ray_dataset.count()
+            total_samples = captioned_dataset.count()
 
             self.logger.info("Pipeline completed successfully!")
 

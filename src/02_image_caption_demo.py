@@ -226,14 +226,15 @@ class ImageCaptionPipelineV2:
                 "enable_chunked_prefill": True,
                 "enable_prefix_caching": True,
                 "limit_mm_per_prompt": {"image": 1},
+                "max_num_seqs": 64,
                 "mm_processor_kwargs": {
                     "max_pixels": self.config.max_pixels,
                     "min_pixels": self.config.min_pixels,
                 },
                 "trust_remote_code": True,
-                "gpu_memory_utilization": 0.9,
-                # "disable_log_stats": False, # Critical: enable vLLM's internal logging. False by default.
-                "distributed_executor_backend": "ray",
+                "gpu_memory_utilization": 0.8,
+                #"disable_log_stats": False, # Critical: enable vLLM's internal logging. False by default.
+                #"distributed_executor_backend": "ray",
             },
             runtime_env={
                 "env_vars": {
@@ -280,8 +281,11 @@ class ImageCaptionPipelineV2:
                     "HF_HOME": os.environ["HF_HOME"],
                     "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
                 }
-            }
+            },
         )
+
+        #ctx = ray.data.DataContext.get_current()
+        #ctx.log_internal_stack_trace_to_stdout = True
 
         try:
             # Step 1: Load dataset
@@ -350,9 +354,8 @@ def main():
     # Create configuration
     config = JobConfig(
         dataset_split="train[:10000]",      # Small sample for demo
-        num_partitions=64,                  # Adjust based on your resources
-        num_inference_engines=2,            # Number of llm engines to run in parallel
-        batch_size=8,
+        num_inference_engines=4,            # Number of llm engines to run in parallel
+        batch_size=16,
     )
 
     # Create and run pipeline
