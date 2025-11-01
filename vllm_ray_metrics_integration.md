@@ -5,6 +5,8 @@
 ## Overview
 This guide documents how to enable Ray metrics collection for vLLM when using Ray Data LLM. This solution was developed through investigation and has been confirmed as the correct approach by the Ray team.
 
+**Prerequisites:** Follow the guide from [Ray Cluster Metrics](https://docs.ray.io/en/master/cluster/metrics.html) to install Promtheus and Grafana for monitoring Ray cluster metrics.
+
 ## Background
 While vLLM provides [Prometheus and Grafana integration](https://docs.vllm.ai/en/v0.7.2/getting_started/examples/prometheus_grafana.html), and Ray Serve has [LLM observability support](https://docs.ray.io/en/master/serve/llm/user-guides/observability.html), **Ray Data LLM does not have out-of-the-box vLLM metrics integration**.
 
@@ -17,7 +19,7 @@ By default, vLLM metrics are not automatically exported via Ray's metrics system
 
 ## Solution
 
-The solution involves leveraging vLLM v1's Ray metrics wrappers ([vllm.v1.metrics.ray_wrappers](https://docs.vllm.ai/en/latest/api/vllm/v1/metrics/ray_wrappers.html)) which forward vLLM counters/histograms into `ray.util.metrics`. This approach has been confirmed by the Ray team (Kourosh Hakhamaneshi) as the correct way to integrate vLLM metrics with Ray Data LLM.
+The solution involves leveraging vLLM v1's Ray metrics wrappers ([vllm.v1.metrics.ray_wrappers](https://docs.vllm.ai/en/latest/api/vllm/v1/metrics/ray_wrappers.html)) which forward vLLM counters/histograms into `ray.util.metrics`. This approach has been confirmed by the Ray team (Kourosh Hakhamaneshi) in [slack thread](https://ray.slack.com/archives/C08H0M37WLQ/p1761686813471059?thread_ts=1760636442.990289&cid=C08H0M37WLQ) as the correct way to integrate vLLM metrics with Ray Data LLM.
 
 ### 1. Enable Ray Metrics in vLLM Engine
 Since Ray Data LLM doesn't expose the `stat_loggers` parameter (unlike Ray Serve's `LLMConfig`), you need to modify the engine initialization. In the Ray Data LLM engine initialization, import and use `RayPrometheusStatLogger`:
@@ -46,7 +48,7 @@ processor_config = vLLMEngineProcessorConfig(
     model_source=self.config.model_name,
     engine_kwargs={
         # ... other settings ...
-        "disable_log_stats": False,  # Enable vLLM stats logging
+        "disable_log_stats": False,  # Enable vLLM stats logging. It is by default set to False, you may skip mentioning it.
     },
     runtime_env={
         "env_vars": {
@@ -68,34 +70,34 @@ ray.init(
 
 ## Available Metrics
 
-Once configured, the following vLLM metrics are available via Ray:
-
 **Note:** The `RayPrometheusStatLogger` sanitizes the the opentelemetry name in the [vllm.v1.metrics.ray_wrappers](https://docs.vllm.ai/en/latest/api/vllm/v1/metrics/ray_wrappers.html).
 So all the messages are emitted with prefix `ray_vllm` and import it as Ray Data LLM dashboard.
 
 You can make a copy of the Ray Serve LLM dashboard and replace all the prom ql `vllm:` with `ray_vllm`.
 
+Once configured, the following [vLLM v1 metrics](https://docs.vllm.ai/en/latest/design/metrics.html#v1-metrics) are available via Ray:
+
+
 - **Request Metrics**:
-  - `ray_vllm_num_requests_running` - Number of requests currently being processed
-  - `ray_vllm_num_requests_waiting` - Number of requests waiting in queue
-  - `ray_vllm_request_success` - Count of successfully processed requests
+  - `ray_vllm_num_requests_running` - (Gauge) - Number of requests currently running.
+  - `ray_vllm_num_requests_waiting` - (Gauge) - Number of requests currently waiting
+  - `ray_vllm_request_success_total` -Number of finished requests by their finish reason: either an EOS token was generated or the max sequence length was reached.
   
 - **Performance Metrics**:
-  - `ray_vllm_time_to_first_token_seconds` - Time to first token (TTFT)
-  - `ray_vllm_time_per_output_token_seconds` - Time per output token (TPOT)
-  - `ray_vllm_e2e_request_latency_seconds` - End-to-end request latency
+  - `ray_vllm_time_to_first_token_seconds` - (Histogram) - Time to First Token (TTFT) latency in seconds.
+  - `ray_vllm_time_per_output_token_seconds` - Inter-token latency (Time Per Output Token, TPOT) in seconds.
+  - `ray_vllm_e2e_request_latency_seconds` - End to end request latency measured in seconds.
   
 - **Throughput Metrics**:
-  - `ray_vllm_prompt_tokens` - Number of prompt tokens processed
-  - `ray_vllm_generation_tokens` - Number of generation tokens produced
+  - `ray_vllm_prompt_tokens_total` - Number of prompt tokens processed.
+  - `ray_vllm_generation_tokens_total` - Number of generation tokens produced
   
 - **Resource Metrics**:
-  - `ray_vllm_kv_cache_usage_perc` - KV cache utilization percentage
-  - `ray_vllm_gpu_cache_usage_perc` - GPU cache usage (deprecated, use kv_cache_usage_perc)
+  - `ray_vllm_kv_cache_usage_perc` - Fraction of used KV cache blocks (0–1).
   
 - **Prefix Caching Metrics** (if enabled):
-  - `ray_vllm_prefix_cache_queries` - Number of prefix cache queries
-  - `ray_vllm_prefix_cache_hits` - Number of prefix cache hits
+  - `ray_vllm_prefix_cache_queries` - (Counter) - Number of prefix cache queries.
+  - `ray_vllm_prefix_cache_hits` - (Counter) - Number of prefix cache hits.
 
 ## Accessing Metrics
 
@@ -115,8 +117,10 @@ curl http://localhost:8080/metrics | grep vllm
 ### Via Ray Dashboard
 Navigate to http://localhost:8265/metrics to see all Ray and vLLM metrics.
 
-### Via Grafana's "Serve LLM Dashboard"
-Once the integration is complete, the "Serve LLM Dashboard" (originally designed for Ray Serve) will show vLLM metrics for Ray Data LLM deployments as well. Note that the dashboard name might be misleading since it's not actually using Ray Serve.
+### Via Grafana's "Ray Data LLM Dashboard"
+I made a copy of the Ray Serve LLM dashboard and replaced all the prom ql `vllm:` with `ray_vllm` and imported it as the "Ray Data LLM Dashboard".
+
+Once the integration is complete, the "Ray Data LLM Dashboard" will show vLLM metrics for all the running vLLM engines. You can find it in [ray_data_llm_dashboard.json](grafana/ray_data_llm_dashboard.json).
 
 ## Benefits
 
@@ -147,8 +151,6 @@ Based on feedback from the Ray team:
 
 1. **Make it Configurable**: The `stat_loggers` parameter should be exposed in Ray Data LLM's configuration, similar to Ray Serve's `LLMConfig.log_engine_metrics`.
 
-2. **Version Compatibility**: The `multiprocess_mode` issue needs to be fixed upstream for the latest Ray version.
-
 3. **Dedicated Dashboard**: Instead of reusing the "Serve LLM Dashboard", a dedicated "Ray Data LLM Dashboard" would be more appropriate.
 
 4. **GitHub Issue**: A feature request should be filed to make this integration more elegant and out-of-the-box.
@@ -156,6 +158,7 @@ Based on feedback from the Ray team:
 ## References
 
 - [vLLM Prometheus/Grafana Guide](https://docs.vllm.ai/en/v0.7.2/getting_started/examples/prometheus_grafana.html)
+- [vLLM v1 Metrics](https://docs.vllm.ai/en/latest/design/metrics.html)
 - [Ray Serve LLM Observability](https://docs.ray.io/en/master/serve/llm/user-guides/observability.html)
 - [vLLM Ray Metrics Wrappers API](https://docs.vllm.ai/en/latest/api/vllm/v1/metrics/ray_wrappers.html)
 - [Ray Cluster Metrics](https://docs.ray.io/en/master/cluster/metrics.html)
