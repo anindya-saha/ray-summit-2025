@@ -1,3 +1,5 @@
+# Developer Guide
+
 ## Project Structure with UV
 
 This project uses [UV](https://github.com/astral-sh/uv) as the Python package and project manager. UV provides fast, reliable Python package management with a focus on reproducibility.
@@ -53,33 +55,34 @@ export HF_HOME=<some folder where huggingface would download models, datasets et
 python3 src/01_image_caption_demo.py
 ```
 
+### Virtual Environment Management
+
+UV automatically creates and manages a virtual environment in `.venv/`.
+
+To activate the virtual environment:
+```bash
+source .venv/bin/activate
+```
+
 ### Verification
 
 Run the verification script to check all installations:
 ```bash
+# Run commands in the virtual environment
 source .venv/bin/activate
 
 python3 src/verify_install.py
 ```
 
 ## Running the code
-### Virtual Environment Management
 
-UV automatically creates and manages a virtual environment in `.venv/`:
-- No need to manually activate/deactivate
-- UV commands automatically use the project's virtual environment
-- Compatible with standard Python tooling
 
-To activate the virtual environment:
 ```bash
-source .venv/bin/activate
-
 # Run commands in the virtual environment
 export HF_TOKEN=<YOUR HF_TOKEN>
 export HF_HOME=<some folder where huggingface would download models, datasets etc.>
 ```
 
-Run the application:
 ```bash
 # Run commands in the virtual environment
 
@@ -99,7 +102,7 @@ def create_llm_processor(self):
           ...
         },
         ...
-        # comment out this line
+        # comment out this line, let Ray figure out
         # accelerator_type=self.config.accelerator_type,
         ...
     )
@@ -110,7 +113,7 @@ def main():
     """Main entry point."""
     # Create configuration
     config = JobConfig(
-        dataset_split="train[:100]",      # Make a small sample for demo
+        dataset_split="train[:100]",      # reduce the datatset size to make a small sample for demo
         num_inference_engines=1,          # change the number of llm engines to 1
     )
 ```
@@ -118,7 +121,7 @@ def main():
 
 ### PyTorch with CUDA Support
 
-The project is configured to use PyTorch with CUDA 12.8 support:
+The project is configured to use `PyTorch 2.8.0` with `CUDA 12.8` support:
 
 ```toml
 [tool.uv.sources]
@@ -165,22 +168,27 @@ override-dependencies = [
 
 ### Development Dependencies
 
-Install development dependencies:
-```bash
-uv sync --extra dev
-```
-
-This includes:
+Install development dependencies which includes:
 - **Black** - Code formatter
 - **isort** - Import sorter
 - **flake8** - Linter
 
-**Code Formatting**
 
-Format Python files:
+```bash
+uv sync --extra dev
+```
+
+**Formatting Code**
+
+
 ```bash
 black .
+black src/01_image_caption_demo.py
+```
+
+```bash
 isort .
+isort src/01_image_caption_demo.py
 ```
 
 **VS Code Setup**
@@ -207,4 +215,3 @@ For auto-formatting on save, create `.vscode/settings.json`:
     ]
 }
 ```
-

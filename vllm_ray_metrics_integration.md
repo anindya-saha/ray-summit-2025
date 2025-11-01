@@ -17,7 +17,7 @@ By default, vLLM metrics are not automatically exported via Ray's metrics system
 
 ## Solution
 
-The solution involves leveraging vLLM v1's Ray metrics wrappers ([vllm.v1.metrics.ray_wrappers](https://docs.vllm.ai/en/latest/api/vllm/v1/metrics/ray_wrappers.html)) which forward vLLM counters/histograms into `ray.util.metrics`. This approach has been confirmed by the Ray team (Kourosh Hakhamaneshi) as the correct way to integrate vLLM metrics with Ray Data LLM.
+The solution involves leveraging vLLM v1's Ray metrics wrappers ([vllm.v1.metrics.ray_wrappers](https://docs.vllm.ai/en/latest/api/vllm/v1/metrics/ray_wrappers.html)) which forward vLLM counters/histograms into `ray.util.metrics`. This approach has been confirmed by the Ray team (Kourosh Hakhamaneshi) in [slack thread](https://ray.slack.com/archives/C08H0M37WLQ/p1761686813471059?thread_ts=1760636442.990289&cid=C08H0M37WLQ) as the correct way to integrate vLLM metrics with Ray Data LLM.
 
 ### 1. Enable Ray Metrics in vLLM Engine
 Since Ray Data LLM doesn't expose the `stat_loggers` parameter (unlike Ray Serve's `LLMConfig`), you need to modify the engine initialization. In the Ray Data LLM engine initialization, import and use `RayPrometheusStatLogger`:
