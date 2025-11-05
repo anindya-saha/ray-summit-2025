@@ -196,6 +196,7 @@ class ImageCaptionPipelineV1:
                 "tensor_parallel_size": self.config.tensor_parallel_size,
                 "max_model_len": self.config.max_model_len,
                 "limit_mm_per_prompt": {"image": 1},
+                "max_num_seqs": 64,
                 "mm_processor_kwargs": {
                     "max_pixels": self.config.max_pixels,
                     "min_pixels": self.config.min_pixels,
