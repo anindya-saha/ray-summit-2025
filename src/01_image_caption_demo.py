@@ -195,16 +195,13 @@ class ImageCaptionPipelineV1:
             engine_kwargs={
                 "tensor_parallel_size": self.config.tensor_parallel_size,
                 "max_model_len": self.config.max_model_len,
-                "enable_chunked_prefill": True,
-                "enable_prefix_caching": True,
                 "limit_mm_per_prompt": {"image": 1},
-                "max_num_seqs": 64,
                 "mm_processor_kwargs": {
                     "max_pixels": self.config.max_pixels,
                     "min_pixels": self.config.min_pixels,
                 },
                 "trust_remote_code": True,
-                "gpu_memory_utilization": 0.8,
+                "gpu_memory_utilization": 0.9,  # Increase for better utilization
                 #"disable_log_stats": False, # Critical: enable vLLM's internal logging. False by default.
                 #"distributed_executor_backend": "ray",
             },
@@ -302,7 +299,7 @@ def main():
     """Main entry point."""
     # Create configuration
     config = JobConfig(
-        dataset_split="train[:10000]",      # Small sample for demo
+        dataset_split="train[:100000]",     # Small sample for demo
         num_inference_engines=2,            # Number of llm engines to run in parallel
     )
 

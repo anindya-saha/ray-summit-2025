@@ -55,9 +55,9 @@ class JobConfig:
     # Processing configuration
     num_partitions: int = 32
     preprocessing_concurrency: int = 8
-    preprocessing_num_cpus: int = 4
+    preprocessing_num_cpus: int = 1
     postprocessing_concurrency: int = 8
-    postprocessing_num_cpus: int = 4
+    postprocessing_num_cpus: int = 1
 
     # Model configuration
     model_name: str = "Qwen/Qwen2.5-VL-3B-Instruct"
@@ -256,7 +256,7 @@ class ImageCaptionPipelineV3:
                 },
                 "trust_remote_code": True,
                 "gpu_memory_utilization": 0.85,
-                # "disable_log_stats": False, # Critical: enable vLLM's internal logging. False by default.
+                #"disable_log_stats": False, # Critical: enable vLLM's internal logging. False by default.
                 #"distributed_executor_backend": "ray",
             },
             runtime_env={
@@ -377,7 +377,8 @@ def main():
     config = JobConfig(
         dataset_split="train[:10000]",      # Small sample for demo
         num_inference_engines=2,            # Number of llm engines to run in parallel
-        batch_size=8,
+        num_partitions=64,
+        preprocessing_concurrency=16,
     )
 
     # Create and run pipeline

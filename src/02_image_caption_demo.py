@@ -55,6 +55,10 @@ class JobConfig:
     preprocessing_num_cpus: int = 4
     postprocessing_concurrency: int = 8
     postprocessing_num_cpus: int = 4
+    
+    # Batch processing configuration
+    preprocessing_batch_size: int = 32
+    postprocessing_batch_size: int = 64
 
     # Model configuration
     model_name: str = "Qwen/Qwen2.5-VL-3B-Instruct"
@@ -95,41 +99,46 @@ class ImageCaptionPipelineV2:
         self.config = config
         self.logger = logging.getLogger(self.__class__.__name__)
 
-    def caption_preprocess(self, row: dict[str, Any]) -> dict[str, Any]:
+    def caption_preprocess_batch(self, batch: dict[str, Any]) -> dict[str, Any]:
         """
-        Prepare image and prompt for image captioning
-
+        Batch preprocessing for image captioning - more efficient than single-row processing.
+        
         Args:
-            row: Input row containing image data
-                Example structure:
-                {
-                    "image": {
-                        "bytes": bytes,
-                        "path": str,
-                    },
-                    "label": int,
-                }
-
+            batch: Batch of rows containing image data
+            
         Returns:
-            Preprocessed row with messages and preserved image data
+            Batch of preprocessed rows with messages and preserved image data
         """
-        # Handle different image schemas (cached vs HuggingFace)
-        if isinstance(row["image"], dict):
-            # HuggingFace format with bytes
-            pil_image = Image.open(BytesIO(row["image"]["bytes"]))
-            image_path = row["image"].get("path", "unknown")
-            image_bytes = row["image"]["bytes"]
-        else:
-            # Direct PIL Image from cached dataset
-            pil_image = row["image"]
-            image_path = "unknown"
-            # Convert PIL to bytes for preservation
-            buffer = BytesIO()
-            pil_image.save(buffer, format="PNG")
-            image_bytes = buffer.getvalue()
-
-        return {
-            "messages": [
+        # Initialize output lists
+        messages_list = []
+        sampling_params_list = []
+        image_bytes_list = []
+        image_path_list = []
+        
+        # Handle different batch formats (pandas vs dict)
+        if hasattr(batch, 'to_dict'):  # pandas DataFrame
+            batch = batch.to_dict(orient='list')
+        
+        # Process each item in the batch
+        images = batch["image"]
+        for i, image_data in enumerate(images):
+            # Handle different image schemas (cached vs HuggingFace)
+            if isinstance(image_data, dict):
+                # HuggingFace format with bytes
+                pil_image = Image.open(BytesIO(image_data["bytes"]))
+                image_path = image_data.get("path", "unknown")
+                image_bytes = image_data["bytes"]
+            else:
+                # Direct PIL Image from cached dataset
+                pil_image = image_data
+                image_path = "unknown"
+                # Convert PIL to bytes for preservation
+                buffer = BytesIO()
+                pil_image.save(buffer, format="PNG")
+                image_bytes = buffer.getvalue()
+            
+            # Create messages for this image
+            messages = [
                 {
                     "role": "system",
                     "content": "You are an expert image captioner. Provide detailed, "
@@ -150,36 +159,57 @@ class ImageCaptionPipelineV2:
                         },
                     ],
                 },
-            ],
-            "sampling_params": {
+            ]
+            
+            # Append to lists
+            messages_list.append(messages)
+            sampling_params_list.append({
                 "temperature": self.config.temperature,
                 "max_tokens": self.config.max_tokens,
                 "detokenize": True,
-            },
-            # Preserve data for postprocessing
-            "image_bytes": image_bytes,
-            "image_path": image_path,
-        }
-
-    def caption_postprocess(self, row: dict[str, Any]) -> dict[str, Any]:
-        """
-        Extract caption from model output and preserve image data.
-
-        Args:
-            row: Row containing generated text and preserved data
-
-        Returns:
-            Formatted row with caption and image data
-        """
-        # Reconstruct image dict for visualization
-        image_dict = {
-            "bytes": row["image_bytes"],
-            "path": row["image_path"],
-        }
-
+            })
+            image_bytes_list.append(image_bytes)
+            image_path_list.append(image_path)
+        
         return {
-            "caption": row["generated_text"],
-            "image": image_dict,
+            "messages": messages_list,
+            "sampling_params": sampling_params_list,
+            "image_bytes": image_bytes_list,
+            "image_path": image_path_list,
+        }
+
+    def caption_postprocess_batch(self, batch: dict[str, Any]) -> dict[str, Any]:
+        """
+        Batch postprocessing - extract captions and preserve image data.
+        
+        Args:
+            batch: Batch containing generated text and preserved data
+            
+        Returns:
+            Batch of formatted rows with captions and image data
+        """
+        # Initialize output lists
+        caption_list = []
+        image_list = []
+        
+        # Handle different batch formats (pandas vs dict)
+        if hasattr(batch, 'to_dict'):  # pandas DataFrame
+            batch = batch.to_dict(orient='list')
+        
+        # Process each item in the batch
+        for i in range(len(batch["generated_text"])):
+            # Reconstruct image dict for visualization
+            image_dict = {
+                "bytes": batch["image_bytes"][i],
+                "path": batch["image_path"][i],
+            }
+            
+            caption_list.append(batch["generated_text"][i])
+            image_list.append(image_dict)
+        
+        return {
+            "caption": caption_list,
+            "image": image_list,
         }
 
     def load_dataset(self) -> ray.data.Dataset:
@@ -206,12 +236,16 @@ class ImageCaptionPipelineV2:
         return dataset
 
     def preprocess_dataset(self, dataset: ray.data.Dataset) -> ray.data.Dataset:
-        """Apply preprocessing with parallelization."""
-        self.logger.info("Starting parallel preprocessing...")
-        preprocessed = dataset.map(
-            self.caption_preprocess,
+        """Apply preprocessing with parallelization using map_batches."""
+        self.logger.info("Starting parallel batch preprocessing...")
+        
+        # Use map_batches for better efficiency
+        preprocessed = dataset.map_batches(
+            self.caption_preprocess_batch,
+            batch_size=self.config.preprocessing_batch_size,  # Use configured batch size
             num_cpus=self.config.preprocessing_num_cpus,
             concurrency=self.config.preprocessing_concurrency,
+            batch_format="pandas",  # Use pandas for better performance
         )
 
         return preprocessed
@@ -232,7 +266,7 @@ class ImageCaptionPipelineV2:
                     "min_pixels": self.config.min_pixels,
                 },
                 "trust_remote_code": True,
-                "gpu_memory_utilization": 0.8,
+                "gpu_memory_utilization": 0.9,  # Increase for better utilization
                 #"disable_log_stats": False, # Critical: enable vLLM's internal logging. False by default.
                 #"distributed_executor_backend": "ray",
             },
@@ -257,12 +291,16 @@ class ImageCaptionPipelineV2:
         )
 
     def postprocess_dataset(self, dataset: ray.data.Dataset) -> ray.data.Dataset:
-        """Apply postprocessing with parallelization."""
-        self.logger.info("Starting parallel postprocessing...")
-        postprocessed = dataset.map(
-            self.caption_postprocess,
+        """Apply postprocessing with parallelization using map_batches."""
+        self.logger.info("Starting parallel batch postprocessing...")
+        
+        # Use map_batches for better efficiency
+        postprocessed = dataset.map_batches(
+            self.caption_postprocess_batch,
+            batch_size=self.config.postprocessing_batch_size,  # Use configured batch size
             num_cpus=self.config.postprocessing_num_cpus,
             concurrency=self.config.postprocessing_concurrency,
+            batch_format="pandas",  # Use pandas for better performance
         )
 
         return postprocessed
@@ -283,9 +321,6 @@ class ImageCaptionPipelineV2:
                 }
             },
         )
-
-        #ctx = ray.data.DataContext.get_current()
-        #ctx.log_internal_stack_trace_to_stdout = True
 
         try:
             # Step 1: Load dataset
@@ -353,9 +388,15 @@ def main():
     """Main entry point."""
     # Create configuration
     config = JobConfig(
-        dataset_split="train[:10000]",      # Small sample for demo
-        num_inference_engines=4,            # Number of llm engines to run in parallel
-        batch_size=16,
+        dataset_split="train[:100000]",      # 100K images
+        num_inference_engines=2,             # Use 2 GPUs
+        batch_size=32,                       # vLLM batch size
+        preprocessing_batch_size=32,         # Preprocessing batch size
+        postprocessing_batch_size=64,        # Postprocessing batch size
+        num_partitions=256,                  # More partitions for 100K dataset
+        preprocessing_concurrency=16,        # Increased concurrency
+        postprocessing_concurrency=16,       # Increased concurrency
+        output_filename="02_captioned_dataset_100k.parquet",
     )
 
     # Create and run pipeline

@@ -56,9 +56,9 @@ class JobConfig:
     # Processing configuration
     num_partitions: int = 32
     preprocessing_concurrency: int = 8
-    preprocessing_num_cpus: int = 4
+    preprocessing_num_cpus: int = 1
     postprocessing_concurrency: int = 8
-    postprocessing_num_cpus: int = 4
+    postprocessing_num_cpus: int = 1
 
     # Model configuration
     model_name: str = "Qwen/Qwen2.5-VL-3B-Instruct"
@@ -395,6 +395,8 @@ def main():
     config = JobConfig(
         dataset_split="train[:10000]",      # Small sample for demo
         num_inference_engines=4,            # Number of llm engines to run in parallel
+        num_partitions=64,
+        preprocessing_concurrency=16,
         batch_size=16,
     )
 
