@@ -3,6 +3,7 @@
 + Developer Guide [developer.md](developer.md)  
 + vLLM Ray Metrics Integration Guide [vllm_ray_metrics_integration.md](vllm_ray_metrics_integration.md)
 + Understanding Performance [performance.md](performance.md)
++ Ray Summit 2025 Presentation [Slides](scaling-post-training-workflows-anindya-Saha-ray-summit-25.pptx)
 
 ---
 **Title:** Scaling Post-Training Workflows with Ray Data, Ray Data LLM, and vLLM
